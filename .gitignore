@@ -1,0 +1,44 @@
+
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+.Rbuildignore
+.Rprofile
+.Renviron
+renv/library/
+renv/staging/
+renv/cache/
+*.Rproj
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Data / models (keep small samples only)
+data/raw/
+data/interim/
+data/processed/
+models/
+# keep directory structure
+!data/**/.gitkeep
+!models/.gitkeep
+
+# Figures can be regenerated
+figures/
+!figures/.gitkeep
+
+# Quarto/Rmd artifacts
+*.html
+*.pdf
+*_cache/
+.cache/
