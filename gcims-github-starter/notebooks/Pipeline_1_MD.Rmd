@@ -1,0 +1,354 @@
+---
+title: "Comprehensive Analysis of GC-IMS Features for Cohort Classification"
+author: "Deevanshi Walia"
+date: "`r Sys.Date()`"
+output:
+  word_document:
+    toc: yes
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+# This chunk sets up global options for the entire document.
+# It will run, but neither the code nor its output will be shown.
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+# Load all libraries needed for the entire analysis
+library(readr); library(dplyr); library(Boruta); library(MASS); library(caret);
+library(ggplot2); library(GGally); library(vegan); library(pROC); library(e1071);
+library(xgboost); library(tibble); library(tidyr); library(ggpubr); library(forcats);
+library(knitr) 
+```
+# 1. Data Loading and Preparation
+
+This section details the loading and initial preparation of the feature matrix that serves as the input for all subsequent analyses.
+
+```{r load_data}
+# Load libraries for this chunk
+library(readr)
+library(dplyr)
+library(tibble)
+
+# --- Configuration ---
+feature_matrix_path <- "C:/Users/deevanshi.walia/Desktop/Try 2.0/Grouping acc to Jessy/Final_Analysis_Output_Peaks_Clustering_9_0.05/Feature_Matrices/feature_matrix_ROI_INTEGRATION.csv"
+
+# --- Load and Prepare Data ---
+data_full <- read_csv(feature_matrix_path, show_col_types = FALSE)
+data_full$GroupName <- as.factor(data_full$GroupName)
+if (any(is.na(data_full))) {
+  data_full <- na.omit(data_full)
+}
+metadata <- data_full %>% dplyr::select(SampleName, GroupName)
+feature_data <- data_full %>% dplyr::select(starts_with("Cluster_"))
+```
+
+The dataset was successfully loaded, containing `r nrow(feature_data)` samples and `r ncol(feature_data)` features.
+
+# 2. Robust Feature Selection with Boruta
+
+To identify a minimal, non-redundant, and predictively powerful subset of features, the Boruta algorithm was employed.
+
+```{r run_boruta}
+# Load libraries for this chunk
+library(Boruta)
+library(dplyr)
+library(vegan)
+library(MASS)
+library(randomForest) 
+library(e1071)
+library(xgboost)
+library(pROC)
+library(caret)
+
+# --- Run Boruta ---
+set.seed(123)
+boruta_result <- Boruta(
+  x = feature_data,
+  y = as.factor(metadata$GroupName),
+  doTrace = 0,
+  maxRuns = 700
+)
+selected_features <- getSelectedAttributes(boruta_result, withTentative = FALSE)
+feature_data_best <- feature_data[, selected_features, drop = FALSE]
+```
+
+The Boruta algorithm confirmed **`r length(selected_features)`** features as statistically important. The selected features are: `r paste(selected_features, collapse=", ")`.
+
+### Boruta Importance Plot
+
+
+```{r plot_boruta_ggplot, fig.width=12, fig.height=7}
+# Load the necessary libraries for this specific plot
+library(ggplot2)
+library(dplyr)
+library(tidyr) # For the pivot_longer function
+library(forcats) # For reordering factors
+
+# --- Step 1: Extract the Importance History from the Boruta Object ---
+# The raw data for the plot is stored inside the Boruta object.
+# We convert it to a long-format "tidy" data frame for ggplot.
+boruta_plot_data <- as.data.frame(boruta_result$ImpHistory) %>%
+  # Remove the shadow feature columns from the main data for clarity
+  dplyr::select(-matches("shadow")) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "Feature",
+    values_to = "Importance"
+  )
+
+# --- Step 2: Get the Final Decision for Each Feature for Coloring ---
+feature_decisions <- boruta_result$finalDecision %>%
+  tibble::enframe(name = "Feature", value = "Decision")
+
+# Join the decisions back to the plot data
+boruta_plot_data <- boruta_plot_data %>%
+  left_join(feature_decisions, by = "Feature") %>%
+  # Filter out any rejected features to keep the plot clean
+  filter(Decision != "Rejected") %>%
+  # Reorder the features on the x-axis by their median importance
+  mutate(Feature = fct_reorder(Feature, Importance, .fun = median))
+
+# --- Step 3: Create the ggplot ---
+boruta_ggplot <- ggplot(
+  data = boruta_plot_data,
+  aes(x = Feature, y = Importance, fill = Decision)
+) +
+  # Add the boxplots
+  geom_boxplot(alpha = 0.8, outlier.shape = 21, outlier.size = 2) +
+  
+  # Define the colors for the decisions
+  scale_fill_manual(
+    name = "Boruta Decision",
+    values = c("Confirmed" = "darkgreen", "Tentative" = "darkorange")
+  ) +
+  
+  # Add a horizontal line at y=0 for reference
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+  
+  labs(
+    title = "Boruta Feature Importance",
+    subtitle = "Z-scores of feature importance across all iterations",
+    x = "Features",
+    y = "Importance (Z-score)"
+  ) +
+  
+  coord_flip() +
+  
+  theme_bw(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "bottom",
+    axis.text.y = element_text(size = 10)
+  )
+boruta_ggplot
+```
+
+# 3. Statistical and Predictive Validation of the Selected Signature
+
+The biomarker signature identified by Boruta was then subjected to a rigorous validation pipeline to assess its statistical significance and real-world predictive performance.
+
+```{r model_gauntlet}
+# --- This chunk now only performs calculations. Outputs are in later chunks. ---
+library(vegan); library(MASS); library(randomForest); library(e1071);
+library(xgboost); library(pROC); library(caret); library(tibble)
+
+# --- PART C: STATISTICAL SIGNIFICANCE (PERMANOVA) ---
+set.seed(123)
+permanova_result <- adonis2(
+  feature_data_best ~ GroupName,
+  data = metadata,
+  permutations = 999,
+  method = "euclidean" # Use robust distance metric
+)
+permanova_table <- as.data.frame(permanova_result)
+
+# --- PART D & E: MODEL GAUNTLET AND PERFORMANCE SUMMARY ---
+num_samples <- nrow(feature_data_best); y_response <- as.factor(metadata$GroupName)
+y_response_numeric <- as.numeric(y_response)-1; current_group_levels <- levels(y_response)
+positive_class_name <- current_group_levels[2]
+loocv_results <- data.frame(SampleName=metadata$SampleName, ActualGroup=y_response,
+                            lda_scores=numeric(num_samples), rf_scores=numeric(num_samples),
+                            svm_scores=numeric(num_samples), xgb_scores=numeric(num_samples))
+for (i in 1:num_samples) {
+  x_train <- as.matrix(feature_data_best[-i,,drop=F]); y_train <- y_response[-i]
+  y_train_numeric <- y_response_numeric[-i]; x_test <- as.matrix(feature_data_best[i,,drop=F])
+  
+  lda_model<-lda(x=x_train, grouping=y_train); loocv_results$lda_scores[i]<-predict(lda_model,newdata=data.frame(x_test))$posterior[,positive_class_name]
+  min_class_size<-min(table(y_train)); rf_model<-randomForest(x=x_train,y=y_train,ntree=500,sampsize=c(min_class_size,min_class_size))
+  loocv_results$rf_scores[i]<-predict(rf_model,newdata=x_test,type="prob")[,positive_class_name]
+  svm_model<-svm(x=x_train,y=y_train,probability=T,kernel="radial"); svm_pred<-predict(svm_model,newdata=data.frame(x_test),probability=T)
+  loocv_results$svm_scores[i]<-attr(svm_pred,"probabilities")[,positive_class_name]
+  dtrain<-xgb.DMatrix(data=x_train,label=y_train_numeric); dtest<-xgb.DMatrix(data=x_test)
+  scale_pos_weight<-sum(y_train_numeric==0)/sum(y_train_numeric==1)
+  params<-list(objective="binary:logistic",eval_metric="logloss",scale_pos_weight=scale_pos_weight)
+  xgb_model<-xgboost(params=params,data=dtrain,nrounds=50,verbose=0)
+  loocv_results$xgb_scores[i]<-predict(xgb_model,dtest)
+}
+roc_lda <- roc(response=loocv_results$ActualGroup, predictor=loocv_results$lda_scores, levels=current_group_levels)
+roc_rf <- roc(response=loocv_results$ActualGroup, predictor=loocv_results$rf_scores, levels=current_group_levels)
+roc_svm <- roc(response=loocv_results$ActualGroup, predictor=loocv_results$svm_scores, levels=current_group_levels)
+roc_xgb <- roc(response=loocv_results$ActualGroup, predictor=loocv_results$xgb_scores, levels=current_group_levels)
+model_performance_list <- list(); models_to_test <- list(LDA=roc_lda, `Random Forest`=roc_rf, SVM=roc_svm, XGBoost=roc_xgb); cm_list <- list() 
+for (model_name in names(models_to_test)) {
+  current_roc <- models_to_test[[model_name]]
+  best_coords <- coords(current_roc, "best", ret="threshold", best.method="youden")
+  predicted_classes <- ifelse(current_roc$predictor >= best_coords$threshold, current_group_levels[2], current_group_levels[1])
+  cm_stats <- confusionMatrix(data=factor(predicted_classes, levels=current_group_levels), reference=current_roc$response, positive=positive_class_name)
+  cm_list[[model_name]] <- cm_stats
+  model_performance_list[[model_name]] <- c(AUC=auc(current_roc), cm_stats$overall["Accuracy"], cm_stats$byClass[c("Sensitivity","Specificity","Balanced Accuracy","Pos Pred Value","Neg Pred Value")])
+}
+performance_summary <- as.data.frame(do.call(rbind, model_performance_list)) %>%
+  tibble::rownames_to_column("Model") %>%
+  mutate(across(where(is.numeric), ~ round(., 4))) %>%
+  dplyr::select(Model, AUC, Accuracy, `Balanced Accuracy`, Sensitivity, Specificity, `Pos Pred Value`, `Neg Pred Value`)
+```
+
+### 3.1. PERMANOVA Significance Test
+
+```{r print_permanova_result}
+# --- THIS IS THE KEY FIX FOR TABLES ---
+# We wrap the output in kable() to create a beautiful table.
+kable(permanova_table, caption = "PERMANOVA test results for the Boruta-selected feature signature.")
+```
+
+### 3.2. Comparative Model Performance
+
+The table below summarizes the performance of four different classification models trained on the selected features and validated with Leave-One-Out Cross-Validation.
+
+```{r print_performance_summary}
+# Using kable() on the performance summary table
+kable(performance_summary, caption = "Comparative performance metrics for all tested classifiers.")
+```
+### 3.2. ROC Curve and Best Model Analysis
+
+```{r plot_roc_and_cm}
+# --- Combined ROC Curve Plot (unchanged) ---
+roc_list_for_plot <- list(LDA=roc_lda, RF=roc_rf, SVM=roc_svm, XGBoost=roc_xgb)
+roc_plot_combined <- ggroc(roc_list_for_plot, size = 1) +
+  annotate("segment", x = 1, xend = 0, y = 0, yend = 1, color="grey", linetype="dashed") +
+  labs(title = "Comparative ROC Curves", color = "Model") +
+  theme_minimal() + theme(plot.title = element_text(face = "bold", hjust = 0.5))
+
+# This will embed the ROC plot in the final document
+roc_plot_combined
+
+# --- Best Model's Confusion Matrix (NEW, FORMATTED VERSION) ---
+best_model_name <- performance_summary$Model[which.max(performance_summary$`Balanced Accuracy`)]
+cat("\n--- Detailed Confusion Matrix for the Best Performing Model:", best_model_name, "---\n")
+
+# Get the confusion matrix object for the best model
+best_cm_object <- cm_list[[best_model_name]]
+
+# --- 1. Create the main confusion matrix table ---
+cm_table <- as.data.frame(best_cm_object$table)
+colnames(cm_table) <- c("Prediction", "Reference", "Frequency")
+cm_table_wide <- tidyr::pivot_wider(cm_table, names_from = "Reference", values_from = "Frequency")
+
+# Use kable() to format it nicely
+knitr::kable(
+  cm_table_wide,
+  caption = paste("Confusion Matrix for the", best_model_name, "Model")
+)
+
+# --- 2. Create a separate table for the key statistics ---
+# Extract the key metrics we want to show
+key_stats <- c(
+  "Accuracy",
+  "Kappa",
+  "Balanced Accuracy",
+  "Sensitivity",
+  "Specificity",
+  "Pos Pred Value",
+  "Neg Pred Value"
+)
+
+# Combine overall and by-class stats
+all_stats <- c(best_cm_object$overall, best_cm_object$byClass)
+
+# Create a clean data frame of the stats
+stats_to_display <- data.frame(
+  Metric = key_stats,
+  Value = round(all_stats[key_stats], 4) # Round to 4 decimal places
+)
+
+# Use kable() to format this table as well
+knitr::kable(
+  stats_to_display,
+  caption = "Key Performance Statistics for the Best Model"
+)
+```
+
+
+# 4. Characterization of the Biomarker Signature
+
+This section visualizes the properties of the final features selected by Boruta.
+
+
+### 4.1. Intensity Distributions
+
+```{r plot_boxplots, fig.width=12, fig.height=8}
+# --- Load all necessary libraries for this specific plot ---
+library(ggplot2)
+library(tidyr)
+library(ggpubr)
+library(forcats)
+library(dplyr)
+
+# --- Prepare data for plotting ---
+# This ensures we are only working with the selected features
+plot_data_long <- data_full %>%
+  dplyr::select(GroupName, all_of(selected_features)) %>%
+  pivot_longer(
+    cols = -GroupName,
+    names_to = "Feature",
+    values_to = "Intensity"
+  ) %>%
+  # A more robust way to reorder the features numerically for the plot
+  mutate(Feature = fct_reorder(Feature, as.numeric(gsub("Cluster_", "", Feature))))
+
+# --- Create the plot with improved aesthetics ---
+boxplots_with_pvals <- ggplot(
+  data = plot_data_long,
+  aes(x = GroupName, y = Intensity, fill = GroupName)
+) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+  geom_jitter(width = 0.2, alpha = 0.4, size = 1.5) +
+  
+  # Add Wilcoxon p-values to each panel
+  stat_compare_means(
+    method = "wilcox.test",
+    label = "p.format", # e.g., "p = 0.04"
+    label.x.npc = 0.5,  # Center the label
+    size = 3.5
+  ) +
+  
+  # Create a separate panel for each feature
+  facet_wrap(~ Feature, scales = "free_y", ncol = 4) + # Arrange in 4 columns
+  
+  # --- EXPLICITLY DEFINE YOUR COLORS ---
+  scale_fill_manual(
+    name = "Group",
+    values = c("Group 1 (pos)" = "darkgreen","Group 2 (neg)" = "darkorange") # Example: Blue and Yellow
+    # ❗ IMPORTANT: Make sure these group names exactly match the levels in your `GroupName` column
+  ) +
+  
+  labs(
+    title = "Intensity Distribution of Boruta-Selected Features",
+    subtitle = "P-values from Wilcoxon Rank-Sum Test",
+    x = NULL, # Remove redundant "Group" label
+    y = "Intensity (a.u)"
+  ) +
+  
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    strip.text = element_text(face = "bold"),
+    legend.position = "none",
+    axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1)
+  )
+
+# This is the final line, which tells knitr to render the plot
+boxplots_with_pvals
+```
