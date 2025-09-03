@@ -1,0 +1,11 @@
+---
+title: "GC-IMS Exploration"
+format: html
+---
+
+This Quarto notebook demonstrates exploratory analysis. Replace with your real workflow.
+
+```{r}
+#| message: false
+source("scripts/00_setup.R")
+```
