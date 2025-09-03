@@ -1,0 +1,31 @@
+#for python
+pandas
+matplotlib #generating and saving the validation plots (plt.imshow, plt.plot, plt.savefig)
+scikit-image #peak_local_max function for your 2D peak detection.
+numpy #dependancy
+
+#for R
+# --- List of packages from CRAN (the main R repository) ---
+cran_packages <- c(
+  "readr",          # For fast CSV reading (read_csv)
+  "dplyr",          # For data manipulation (select, filter, mutate, etc.)
+  "tidyr",          # For data tidying (pivot_longer, pivot_wider)
+  "tools",          # For file path manipulation (file_path_sans_ext)
+  "ggplot2",        # For all static plotting
+  "GGally",         # For the ggpairs() plot
+  "ggrepel",        # For non-overlapping plot labels
+  "ggpubr",         # For adding p-values to ggplot (stat_compare_means)
+  "pheatmap",       # For the correlation heatmap
+  "RColorBrewer",   # For color palettes for plotting
+  "caret",          # For machine learning workflows (confusionMatrix, createFolds)
+  "MASS",           # For Linear Discriminant Analysis (lda)
+  "randomForest",   # For the Random Forest model
+  "e1071",          # For the Support Vector Machine (SVM) model
+  "xgboost",        # For the XGBoost model
+  "Boruta",         # For the Boruta feature selection algorithm
+  "pROC",           # For ROC curve analysis and AUC
+  "vegan",          # For PERMANOVA (adonis2)
+  "knitr",          # For creating tables in R Markdown (kable)
+  "rmarkdown",      # For knitting the final reports
+  "reticulate"      # For running the Python peak-picking script
+)
